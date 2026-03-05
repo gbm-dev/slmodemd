@@ -1893,7 +1893,7 @@ int modem_reset(struct modem *m)
 {
 	MODEM_DBG("modem reset...\n");
 	if(m->state != STATE_MODEM_IDLE)
-		modem_hup(m,1);
+		modem_hup(m,0);
 	else if(m->started)
 		modem_stop(m);
 	else if(m->hook)

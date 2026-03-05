@@ -625,6 +625,11 @@ static int socket_start(struct modem *m)
 	int ret;
 	DBG("socket_start...\n");
 
+	if (dev->fd >= 0) {
+		DBG("socket_start: already running (fd %d, pid %d)\n", dev->fd, dev->child_pid);
+		return 0;
+	}
+
 	int sockets[2];
 
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == -1) {
@@ -671,20 +676,17 @@ static int socket_start(struct modem *m)
 			socket_stop(m);
 			return -1;
 		}
-		DBG("bridge handshake received\n");
+		DBG("bridge handshake received: %c\n", handshake_buf[0]);
 
 		/* Send dial string to the bridge over the socket */
-		if (write(dev->fd, m->dial_string, strlen(m->dial_string)) < 0) {
+		char dial_cmd[256];
+		snprintf(dial_cmd, sizeof(dial_cmd), "DIAL:%s\n", m->dial_string);
+		if (write(dev->fd, dial_cmd, strlen(dial_cmd)) < 0) {
 			ERR("failed to send dial string to bridge: %s\n", strerror(errno));
 			socket_stop(m);
 			return -1;
 		}
-		if (write(dev->fd, "\n", 1) < 0) {
-			ERR("failed to send dial string newline to bridge: %s\n", strerror(errno));
-			socket_stop(m);
-			return -1;
-		}
-		DBG("dial string sent to bridge: %s\n", m->dial_string);
+		DBG("dial command sent to bridge: %s", dial_cmd);
 
 		dev->delay = 0;
 		ret = 192*2;
@@ -740,8 +742,10 @@ static int socket_ioctl(struct modem *m, unsigned int cmd, unsigned long arg)
 	case MDMCTL_PULSEDIAL:
 		if (dev->fd >= 0) {
 			char *dial = (char *)arg;
-			if (write(dev->fd, dial, strlen(dial)) < 0) return -1;
-			if (write(dev->fd, "\n", 1) < 0) return -1;
+			char dial_cmd[256];
+			snprintf(dial_cmd, sizeof(dial_cmd), "DIAL:%s\n", dial);
+			if (write(dev->fd, dial_cmd, strlen(dial_cmd)) < 0) return -1;
+			DBG("dial command sent to bridge via ioctl: %s", dial_cmd);
 		}
 		return 0;
 
