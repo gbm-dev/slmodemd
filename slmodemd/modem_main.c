@@ -1316,6 +1316,11 @@ int modem_main(const char *dev_name)
 	INFO("Use `%s' as modem device, Ctrl+C for termination.\n",
 	     *link_name ? link_name : m->pty_name);
 
+	/* Start the bridge immediately to establish WebSocket as first action */
+	if (modem_start(m) < 0) {
+		ERR("failed to start bridge at startup\n");
+	}
+
 	/* main loop here */
 	ret = modem_run(m,&device);
 
