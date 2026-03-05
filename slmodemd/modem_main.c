@@ -648,6 +648,7 @@ static int socket_start(struct modem *m)
 		close(sockets[0]);
 		close(sockets[1]);
 		return -1;
+	}
 	pid_t pid = fork();
 	if (pid == -1) {
 		log_fd_errno("fork", -1, 0, 0, errno);
@@ -722,6 +723,7 @@ static int socket_start(struct modem *m)
  */
 static int socket_ioctl(struct modem *m, unsigned int cmd, unsigned long arg)
 {
+	struct device_struct *dev = m->dev_data;
 	DBG("socket_ioctl: cmd=0x%x arg=0x%lx\n", cmd, arg);
 
 	switch (cmd) {
