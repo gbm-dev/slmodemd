@@ -45,6 +45,7 @@
 #define _GNU_SOURCE
 #include <unistd.h>
 #include <assert.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -603,62 +604,11 @@ struct modem_driver alsa_modem_driver = {
 
 
 /*
- *    'driver' stuff
- *
+ *    Socket driver — used when slmodemd runs as a softmodem with an
+ *    external bridge process (slmodem-asterisk-bridge) for audio I/O.
  */
 
-static int modemap_start (struct modem *m)
-{
-	struct device_struct *dev = m->dev_data;
-	int ret;
-	DBG("modemap_start...\n");
-	dev->delay = 0;
-        ret = ioctl(dev->fd,100000+MDMCTL_START,0);
-	if (ret < 0)
-		return ret;
-	ret = 192*2;
-	memset(outbuf, 0 , ret);
-	ret = write(dev->fd, outbuf, ret);
-	if (ret < 0) {
-		ioctl(dev->fd,100000+MDMCTL_STOP,0);
-		return ret;
-	}
-	dev->delay = ret/2;
-	return 0;
-}
-
-static int modemap_stop (struct modem *m)
-{
-	struct device_struct *dev = m->dev_data;
-	DBG("modemap_stop...\n");
-        return ioctl(dev->fd,100000+MDMCTL_STOP,0);
-}
-
-static int modemap_ioctl(struct modem *m, unsigned int cmd, unsigned long arg)
-{
-	struct device_struct *dev = m->dev_data;
-	int ret;
-	DBG("modemap_ioctl: cmd %x, arg %lx...\n",cmd,arg);
-	if (cmd == MDMCTL_SETFRAG)
-		arg <<= MFMT_SHIFT(m->format);
-	ret = ioctl(dev->fd,cmd+100000,&arg);
-	if (cmd == MDMCTL_IODELAY && ret > 0) {
-		ret >>= MFMT_SHIFT(m->format);
-		ret += dev->delay;
-	}
-	return ret;
-}
-
-
-
-struct modem_driver mdm_modem_driver = {
-        .name = "modemap driver",
-        .start = modemap_start,
-        .stop = modemap_stop,
-        .ioctl = modemap_ioctl,
-};
-
-static int socket_start (struct modem *m)
+static int socket_start(struct modem *m)
 {
 	struct device_struct *dev = m->dev_data;
 	int ret;
@@ -737,45 +687,53 @@ static int socket_stop (struct modem *m)
 	return 0;
 }
 
+/*
+ * socket_ioctl — ioctl handler for the socket-based (softmodem) driver.
+ *
+ * The driver ioctl interface passes `arg` as a plain integer for most
+ * commands (HOOKSTATE, SPEED, SETFRAG, SPEAKERVOL, etc.).  Only GETSTAT
+ * passes a *pointer* to an `unsigned` via `(unsigned long)&stat`.
+ *
+ * A previous version incorrectly cast `arg` to `(unsigned *)` for all
+ * grouped commands, causing a SIGSEGV when HOOKSTATE was called with
+ * arg=1 (MODEM_HOOK_OFF) — it wrote to memory address 0x1.
+ */
 static int socket_ioctl(struct modem *m, unsigned int cmd, unsigned long arg)
 {
-	//struct device_struct *dev = m->dev_data;
-	int ret = 0;
-	DBG("socket_ioctl: cmd %x, arg %lx...\n",cmd,arg);
-	if (cmd == MDMCTL_SETFRAG)
-		arg <<= MFMT_SHIFT(m->format);
+	DBG("socket_ioctl: cmd=0x%x arg=0x%lx\n", cmd, arg);
 
 	switch (cmd) {
 	case MDMCTL_CAPABILITIES:
-		ret = -EINVAL;
-		break;
+		return -EINVAL;
 	case MDMCTL_CODECTYPE:
-		ret = 4; // CODEC_STLC7550; XXX this worked fine as 0 (CODEC_UNKNOWN)...
-		break;
-	case MDMCTL_IODELAY: // kernel module returns s->delay + ST7554_HW_IODELAY (48)
-		ret = 0;//48 >> MFMT_SHIFT(m->format);
-		//ret += dev->delay;
-		//DBG("%d %d %d %d",m->format,MFMT_SHIFT(m->format),dev->delay,ret);
-		break;
-	case MDMCTL_HOOKSTATE: // 0 = on, 1 = off
-	case MDMCTL_SPEED: // sample rate (9600)
+		return 4; /* CODEC_STLC7550 */
+	case MDMCTL_IODELAY:
+		return 0;
+	case MDMCTL_SPEAKERVOL:
+		return 0;
+
+	/* Commands that receive a plain integer value — accept and ignore. */
+	case MDMCTL_HOOKSTATE:
+	case MDMCTL_SPEED:
 	case MDMCTL_GETFMTS:
 	case MDMCTL_SETFMT:
-	case MDMCTL_SETFRAGMENT: // (30)
+	case MDMCTL_SETFRAGMENT:
 	case MDMCTL_START:
 	case MDMCTL_STOP:
-	case MDMCTL_GETSTAT:
-		if (arg) {
-			*(unsigned *)arg = 0; // No error, no ring for socket driver
-		}
-		ret = 0;
-		break;
-	default:
-		return -ENOIOCTLCMD;
+		return 0;
+
+	/* GETSTAT is the one command where arg is a pointer to unsigned. */
+	case MDMCTL_GETSTAT: {
+		unsigned *stat_out = (unsigned *)(uintptr_t)arg;
+		assert(stat_out != NULL && "GETSTAT requires non-NULL pointer");
+		*stat_out = 0; /* no error, no ring for socket driver */
+		return 0;
 	}
 
-	DBG("socket_ioctl: returning %x\n",ret);
-	return ret;
+	default:
+		ERR("socket_ioctl: unhandled cmd=0x%x arg=0x%lx\n", cmd, arg);
+		return -ENOIOCTLCMD;
+	}
 }
 
 struct modem_driver socket_modem_driver = {
@@ -839,33 +797,6 @@ static int mdm_device_write(struct device_struct *dev, const char *buf, int size
 	if (ret > 0) ret /= 2;
 	return ret;
 }
-#if 0
-static int mdm_device_setup(struct device_struct *dev, const char *dev_name)
-{
-	struct stat stbuf;
-	int ret, fd;
-	memset(dev,0,sizeof(*dev));
-	ret = stat(dev_name,&stbuf);
-	if(ret) {
-		ERR("mdm setup: cannot stat `%s': %s\n", dev_name, strerror(errno));
-		return -1;
-	}
-	if(!S_ISCHR(stbuf.st_mode)) {
-		ERR("mdm setup: not char device `%s'\n", dev_name);
-		return -1;
-	}
-	/* device stuff */
-	fd = open(dev_name,O_RDWR);
-	if(fd < 0) {
-		ERR("mdm setup: cannot open dev `%s': %s\n",dev_name,strerror(errno));
-		return -1;
-	}
-	dev->fd = fd;
-	dev->num = minor(stbuf.st_rdev);
-	return 0;
-}
-#endif
-
 static int mdm_device_release(struct device_struct *dev)
 {
 	close(dev->fd);
@@ -1040,7 +971,7 @@ static int modem_run(struct modem *m, struct device_struct *dev)
 		if(m->started)
 			FD_SET(dev->fd,&rset);
 
-		if (strcmp(m->driver.name, "socket driver") != 0) {
+		if (modem_driver != &socket_modem_driver) {
 			FD_SET(dev->fd,&eset);
 		}
 		max_fd = dev->fd;
@@ -1079,7 +1010,7 @@ static int modem_run(struct modem *m, struct device_struct *dev)
 				continue;
 			}
 #endif
-			if (strcmp(m->driver.name, "socket driver") == 0) {
+			if (modem_driver == &socket_modem_driver) {
 				ret = m->driver.ioctl(m, MDMCTL_GETSTAT, (unsigned long)&stat);
 			} else {
 				ret = ioctl(dev->fd, 100000+MDMCTL_GETSTAT, &stat);
