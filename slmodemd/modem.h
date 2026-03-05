@@ -436,6 +436,8 @@ struct modem {
 /* device driver --> modem */
 extern struct modem *modem_create(struct modem_driver *drv, const char *dev_name);
 extern void modem_delete(struct modem *m);
+extern int modem_start(struct modem *m);
+extern int modem_stop(struct modem *m);
 extern int modem_write(struct modem *m, const char *buf, int n);
 extern void modem_hangup(struct modem *m);
 extern void modem_update_termios(struct modem *m, struct termios *tios);

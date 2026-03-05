@@ -104,8 +104,8 @@ extern void FAX_delete(void *obj);
 int modem_answer(struct modem *m);
 static int sregs_init(unsigned char sregs[]);
 static void do_modem_change_dp(struct modem *);
-static int modem_start(struct modem *);
-static int modem_stop (struct modem *);
+int modem_start(struct modem *);
+int modem_stop (struct modem *);
 static struct dp_operations *get_dp_operations(enum DP_ID id);
 static int modem_get_chars(struct modem *m, char *buf, int n);
 static int modem_put_chars(struct modem *m, const char *buf, int n);
@@ -1285,7 +1285,7 @@ static int do_modem_start(struct modem *m)
 	return ret;
 }
 
-static int modem_start (struct modem *m)
+int modem_start (struct modem *m)
 {
         int ret;
 
@@ -1340,7 +1340,7 @@ static int modem_start (struct modem *m)
 }
 
 
-static int modem_stop (struct modem *m)
+int modem_stop (struct modem *m)
 {
         int ret = 0;
         MODEM_DBG("modem_stop..\n");
