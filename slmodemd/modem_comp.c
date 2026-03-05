@@ -578,7 +578,7 @@ int comp_flush_encoder(struct comp_state *c)
 int comp_encode(struct comp_state *c, u8 *in, int n)
 {
 	register int i, ret=0;
-	register u16 cw = 0;
+	register u16 cw;
 
 	for(i=0;i<n;) {
 		if (c->update_at) {

@@ -106,7 +106,7 @@ extern int  modem_set_mode(struct modem *m, enum MODEM_MODE mode);
  */
 
 /* simple toupper + strncmp */
-static int toupper_strncmp(char *s1, char *s2, int n)
+static int toupper_strncmp(const char *s1, const char *s2, int n)
 {
 	int i;
 	for(i = 0 ; i < n ; i++)
@@ -152,7 +152,7 @@ static int process_B(struct modem *m, char *p, int *len)
 	return 0;
 }
 
-static int process_D(struct modem *m, char *p, int *len)
+static int process_D(struct modem *m, const char *p, int *len)
 {
 	int ret;
 	AT_DBG("AT D command...\n");
@@ -167,7 +167,9 @@ static int process_D(struct modem *m, char *p, int *len)
 		modem_set_sreg(m,SREG_TONE_OR_PULSE,0);
 		break;
 	case 'L':
-		if(m->dial_string) {
+		/* Redial last number. dial_string is a fixed-size array so
+		 * check for non-empty content, not NULL pointer. */
+		if(m->dial_string[0]) {
 			modem_send_to_tty(m,"Dialing ",8);
 			modem_send_to_tty(m,m->dial_string,
 						strlen(m->dial_string));
@@ -208,7 +210,7 @@ static int process_H(struct modem *m, char *p, int *len)
 	return ret ? -1 : 0;
 }
 
-static int process_I(struct modem *m, char *p, int *len)
+static int process_I(struct modem *m, const char *p, int *len)
 {
 	const char *s;
 	int c,i;
@@ -298,7 +300,7 @@ static int process_O(struct modem *m, char *p, int *len)
 	return 1;
 }
 
-static int process_S(struct modem *m, char *p, int *len)
+static int process_S(struct modem *m, const char *p, int *len)
 {
 	unsigned n = 0;
 	int val;
@@ -332,7 +334,7 @@ static int process_S(struct modem *m, char *p, int *len)
 	return 0;
 }
 
-static int process_Z(struct modem *m, char *p, int *len)
+static int process_Z(struct modem *m, const char *p, int *len)
 {
 	AT_DBG("AT Z command...\n");
 #if 1
@@ -386,7 +388,6 @@ static int process_plus_GCI(struct modem *m, char *p, int *len)
 {
 	static const char gci_string[] = "+GCI:";
 	char strval[8];
-	const struct homolog_set *h;
 	char *end;
 	unsigned long n;
 	AT_DBG ("AT+GCI...\n");
@@ -398,8 +399,8 @@ static int process_plus_GCI(struct modem *m, char *p, int *len)
 			*len += 1;
 			modem_send_to_tty(m,gci_string,strlen(gci_string));
 			modem_send_to_tty(m,"(",1);
-			for(h=homolog_set;h->name;h++) {
-				n = sprintf(strval,"%x,",h->id);
+			for(const struct homolog_set *h=homolog_set;h->name;h++) {
+				n = snprintf(strval,sizeof(strval),"%x,",h->id);
 				modem_send_to_tty(m,strval,n);
 			}
 			modem_send_to_tty(m,")",1);
@@ -410,14 +411,14 @@ static int process_plus_GCI(struct modem *m, char *p, int *len)
 			if(end == p) {
 				return -1;
 			}
-			*len += end - p; p = end;
+			*len += end - p;
 			/* set country n */
 			if(modem_homolog_init(m,n,NULL))
 				return -1;
                 }
 		break;
 	case '?':
-		n = sprintf(strval,"%x",m->homolog->id);
+		n = snprintf(strval,sizeof(strval),"%x",m->homolog->id);
 		modem_send_to_tty(m, "+GCI:",5);
 		modem_send_to_tty(m, strval, n);
 		modem_send_to_tty(m, CRLF_CHARS(m), 2);
@@ -452,11 +453,11 @@ static int process_plus_MS(struct modem *m, char *p, int *len)
 			for(drv = modem_dp_drivers ; drv->id ; drv++ ) {
 				if(!drv->code || !drv->op) continue;
 				if(is_found++>0) modem_send_to_tty(m,",",1);
-				sprintf(strval,"%d",drv->id);
+				snprintf(strval,sizeof(strval),"%d",drv->id);
 				modem_send_to_tty(m,strval,strlen(strval));
 			}
 			modem_send_to_tty(m,"),(0,1),",1+7);
-			sprintf(strval,"(%u-%u),",MODEM_MIN_RATE,MODEM_MAX_RATE);
+			snprintf(strval,sizeof(strval),"(%u-%u),",MODEM_MIN_RATE,MODEM_MAX_RATE);
 			modem_send_to_tty(m,strval,strlen(strval));
 			modem_send_to_tty(m,strval,strlen(strval)-1);
 			modem_send_to_tty(m, CRLF_CHARS(m),2);
@@ -499,7 +500,7 @@ static int process_plus_MS(struct modem *m, char *p, int *len)
 		m->max_rate       = max_rate;
 		break;
 	case '?':
-		n = sprintf(strval,"%d,%d,%u,%u",MODEM_DP(m),MODEM_AUTOMODE(m),
+		n = snprintf(strval,sizeof(strval),"%d,%d,%u,%u",MODEM_DP(m),MODEM_AUTOMODE(m),
 			    m->min_rate,m->max_rate);
 		modem_send_to_tty(m, strval, n);
 		modem_send_to_tty(m, CRLF_CHARS(m), 2);
@@ -622,13 +623,13 @@ static int set_voice_params(struct modem *m, char *p, const char *cmd,
 		p++;
 		if(*p == '?') {
 			*len += 1;
-			sprintf(strval, "+%s=", cmd);
+			snprintf(strval, sizeof(strval), "+%s=", cmd);
 			modem_send_to_tty(m, strval, strlen(strval));
 			if(prefix)
 				modem_send_to_tty(m, prefix, strlen(prefix));
 			prm = param;
 			while(prm->val) {
-				sprintf(strval, "%d-%d", prm->min, prm->max);
+				snprintf(strval, sizeof(strval), "%u-%u", prm->min, prm->max);
 				modem_send_to_tty(m, strval, strlen(strval));
 				prm++;
 				if(prm->val)
@@ -678,13 +679,13 @@ static int set_voice_params(struct modem *m, char *p, const char *cmd,
 		return 0;
 	}
 	else if ( *p == '?' ) {
-		sprintf(strval, "+%s=", cmd);
+		snprintf(strval, sizeof(strval), "+%s=", cmd);
 		modem_send_to_tty(m, strval, strlen(strval));
 		if(prefix)
 			modem_send_to_tty(m, prefix, strlen(prefix));
 		prm = param;
 		while(prm->val) {
-			sprintf(strval, "%d", *prm->val);
+			snprintf(strval, sizeof(strval), "%u", *prm->val);
 			modem_send_to_tty(m, strval, strlen(strval));
 			prm++;
 			if(prm->val)
@@ -837,7 +838,6 @@ static int process_fax_command(struct modem *m, char *p, int *len)
 		if(p == end)
 			return -1;
 		*len += end - p;
-		p = end;
 		return FAX_class1_command(m->fax_obj, FAX_CMD_FTS, val);
 	}
 	/* +FRS= */
@@ -848,7 +848,6 @@ static int process_fax_command(struct modem *m, char *p, int *len)
 		if(p == end)
 			return -1;
 		*len += end - p;
-		p = end;
 		return FAX_class1_command(m->fax_obj, FAX_CMD_FRS, val);
 	}
 	/* +FTM= */
@@ -865,7 +864,6 @@ static int process_fax_command(struct modem *m, char *p, int *len)
 			if(p == end)
 				return -1;
 			*len += end - p - 1;
-			p = end;
 			return FAX_class1_command(m->fax_obj, FAX_CMD_FTM, val);
 		}
 	}
@@ -882,7 +880,6 @@ static int process_fax_command(struct modem *m, char *p, int *len)
 			if(p == end)
 				return -1;
 			*len += end - p - 1;
-			p = end;
 			return FAX_class1_command(m->fax_obj, FAX_CMD_FRM, val);
 		}
 		return 0;

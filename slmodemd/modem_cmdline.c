@@ -144,9 +144,9 @@ static void usage(const char *prog_name)
 		else
 			n = PR_INFO("      ");
 		n += PR_INFO("--%s%s ",opt->name,opt->arg?"=VAL":"");
-		n += PR_INFO("%*s%s",24-n,"",opt->desc);
+		(void)PR_INFO("%*s%s",24-n,"",opt->desc);
 		if(opt->arg) {
-			n+= PR_INFO(" (default `%s')",opt->arg_val);
+			(void)PR_INFO(" (default `%s')",opt->arg_val);
 		}
 		PR_INFO("\n");
 	}

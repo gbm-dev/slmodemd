@@ -107,7 +107,10 @@ static int modem_test_start (struct modem *m)
 	t->delay = 256;
 	t->started = 1;
 	memset(outbuf,0,t->delay);
-	write(t->out,outbuf,t->delay);
+	if (write(t->out,outbuf,t->delay) < 0) {
+		DBG("modem_test_start: write failed\n");
+		return -1;
+	}
 	return 0;
 }
 
@@ -177,7 +180,7 @@ static int modem_test_run(struct modem_test *modems)
 	fd_set rset,eset;
 	struct termios termios;
 	struct modem_test *t;
-	void *in;
+	char *in;
 	int max_fd = 0;
 	int count, ret;
 
@@ -383,6 +386,10 @@ static int modem_test_init(struct modem_test *t, const char *name, int in, int o
         }
 
         ret = tcgetattr(pty, &termios);
+        if (ret) {
+                ERR("tcgetattr: %s\n",strerror(errno));
+                exit(-1);
+        }
         /* non canonical raw tty */
         cfmakeraw(&termios);
         cfsetispeed(&termios, B115200);

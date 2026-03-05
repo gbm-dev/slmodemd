@@ -769,15 +769,14 @@ static unsigned dpstat2status(unsigned dpstat)
 
 static void modem_dp_process(struct modem *m,void *in,void *out,int count)
 {
+	char *inp = in, *outp = out;
 	int ret;
 	unsigned cnt;
-	//MODEM_DBG("modem_process %d: %d...\n", m->count,count);
 	while(count && m->dp) {
 		cnt = count;
 		if (cnt > m->frag)
 			cnt = m->frag;
-		//MODEM_DBG("%d: running dp %s...\n", m->count,dp->name);
-		ret = m->dp->op->process(m->dp,in,out,cnt);
+		ret = m->dp->op->process(m->dp,inp,outp,cnt);
 		switch(ret) {
 		case DPSTAT_OK:
 			break;
@@ -797,11 +796,11 @@ static void modem_dp_process(struct modem *m,void *in,void *out,int count)
 		}
 
 		count -= cnt;
-		out += cnt<<MFMT_SHIFT(m->format);
-		in  += cnt<<MFMT_SHIFT(m->format);
+		outp += cnt<<MFMT_SHIFT(m->format);
+		inp  += cnt<<MFMT_SHIFT(m->format);
 	}
 	if(count)
-		memset(out,0,count<<MFMT_SHIFT(m->format));
+		memset(outp,0,count<<MFMT_SHIFT(m->format));
 }
 
 
@@ -1342,14 +1341,13 @@ int modem_start (struct modem *m)
 
 int modem_stop (struct modem *m)
 {
-        int ret = 0;
         MODEM_DBG("modem_stop..\n");
 	modem_set_phase(m, MODEM_PHASE_TEARDOWN, "stop");
 
 	m->process = NULL;
 
 	if(m->started) {
-		ret = m->driver.stop(m);
+		int ret = m->driver.stop(m);
 		m->started = ret;
 		if ( ret ) {
 			MODEM_ERR("modem stop = %d: cannot stop device.\n",ret);
@@ -1366,10 +1364,9 @@ int modem_stop (struct modem *m)
 	modem_comp_exit(m);
 
         if (m->dp) {
-                struct dp *dp;
-                dp = m->dp;
+                struct dp *dp = m->dp;
                 m->dp = 0;
-                if(dp) dp->op->delete(dp);
+                dp->op->delete(dp);
         }
 	if (m->dp_runtime) {
 		dp_runtime_delete(m->dp_runtime);
@@ -2070,7 +2067,7 @@ void modem_print_version()
 }
 
 
-struct modem *modem_create(struct modem_driver *drv, const char *name)
+struct modem *modem_create(const struct modem_driver *drv, const char *name)
 {
 	struct modem *m;
 

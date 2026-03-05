@@ -107,7 +107,7 @@ int datafile_load_info(char *file_name,struct dsp_info *info)
 }
 
 
-int datafile_save_info(char *file_name,struct dsp_info *info)
+int datafile_save_info(char *file_name,const struct dsp_info *info)
 {
 	struct datafile_record *dr;
 	int ret = -1;
@@ -119,8 +119,8 @@ int datafile_save_info(char *file_name,struct dsp_info *info)
 
         dr = (struct datafile_record *)malloc(sizeof(*dr));
         if (!dr) {
-		return -errno;
 		close(fd);
+		return -errno;
 	}
 
 	memcpy(&dr->dsp_info,info,sizeof(*info));

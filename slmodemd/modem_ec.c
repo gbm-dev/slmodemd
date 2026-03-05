@@ -41,6 +41,7 @@
  *
  */
 
+#include <assert.h>
 #include <modem.h>
 #include <modem_debug.h>
 
@@ -158,7 +159,7 @@ static void reset(struct lapm_state *l);
  */
 
 /* le/be value parsing */
-extern inline u32 lapm_get_le_val(u8 *buf, int len)
+extern inline u32 lapm_get_le_val(const u8 *buf, int len)
 {
 	u32 val = 0;
 	while(len--) {
@@ -168,7 +169,7 @@ extern inline u32 lapm_get_le_val(u8 *buf, int len)
 	return val;
 }
 
-extern inline u32 lapm_get_be_val(u8 *buf, int len)
+extern inline u32 lapm_get_be_val(const u8 *buf, int len)
 {
 	u32 val = 0;
 	while(len--) {
@@ -190,7 +191,7 @@ extern inline u32 lapm_get_be_val(u8 *buf, int len)
 static char print_buf[(LAPM_MAX_INFO_SIZE+3)*2];
 
 /* frame debug prints */
-static const char *get_frame_name(frame_t *f)
+static const char *get_frame_name(const frame_t *f)
 {
 	if (!(f->buf[1]&0x1))
 		return "INFO";
@@ -213,7 +214,7 @@ static const char *get_frame_name(frame_t *f)
 	return "invalid frame";
 }
 
-static void print_frame(struct lapm_state *l, char *title, int cmd, frame_t *f)
+static void print_frame(struct lapm_state *l, const char *title, int cmd, const frame_t *f)
 {
 	int i;
 	i = sprintf(print_buf,"(va/vs/vr %d/%d/%d) %s: %s %s",
@@ -321,7 +322,7 @@ static int print_xid_private_params(char *str_buf, u8 *buf, int len)
 	return i;
 }
 
-static int print_xid(struct lapm_state *l,char *str,frame_t *f, int len)
+static int print_xid(struct lapm_state *l,char *str,const frame_t *f, int len)
 {
 	u8 *buf = f->buf + 2;
 	int i = 0;
@@ -391,7 +392,7 @@ static inline frame_t *get_ctrl_frame(struct lapm_state *l)
 
 
 /* U transmission */
-static int tx_unnum(struct lapm_state *l, u8 addr, u8 ctrl, u8 *info, int len)
+static int tx_unnum(struct lapm_state *l, u8 addr, u8 ctrl, const u8 *info, int len)
 {
 	frame_t *f = get_ctrl_frame(l);
 	if (!f) {
@@ -506,7 +507,7 @@ static int parse_xid_private_params(struct lapm_state *l, struct modem_config *c
 
 #define DEFAULT_MODEM_EC_CONFIG {1,1,15,15,128,128,0,512,6}
 
-static int rx_xid(struct lapm_state *l, frame_t *f)
+static int rx_xid(struct lapm_state *l, const frame_t *f)
 {
 	struct modem_config cfg = DEFAULT_MODEM_EC_CONFIG;
 	u8 *buf = f->buf;
@@ -826,11 +827,11 @@ static void push_rest_data(struct modem *m, int bits)
 /* info frame process */
 static int rx_info(struct lapm_state *l, frame_t *f)
 {
-	int ret = 0, n;
+	int ret = 0;
 	//LAPM_PRINT_FRAME("rx_info",1,f);
 
 	/* ack I frames: nr -1 */
-	n = ack_info(l,FRAME_NR(f));
+	(void)ack_info(l,FRAME_NR(f));
 	/* busy */
 	if (l->busy) {
 		if(FRAME_I_PF(f)) /* 8.4.7 */
@@ -886,7 +887,6 @@ static int rx_info(struct lapm_state *l, frame_t *f)
 
 static void rx_super_cmd(struct lapm_state *l, frame_t *f)
 {
-	int n;
 	//LAPM_PRINT_FRAME("rx super:",1,f);
 
 	/* note 8.4.7:
@@ -895,7 +895,7 @@ static void rx_super_cmd(struct lapm_state *l, frame_t *f)
 	case FRAME_S_RR:
 		/* clear peer_busy state */
 		l->peer_busy = 0;
-		n = ack_info(l,FRAME_NR(f));
+		(void)ack_info(l,FRAME_NR(f));
 		/* p=1 may be used for status checking */
 		if (FRAME_S_PF(f) || !tx_info(l)) {
 			if (l->busy)
@@ -907,7 +907,7 @@ static void rx_super_cmd(struct lapm_state *l, frame_t *f)
 	case FRAME_S_RNR:
 		/* going to peer_busy state */
 		l->peer_busy = 1;
-		n = ack_info(l,FRAME_NR(f));
+		(void)ack_info(l,FRAME_NR(f));
 		/* if p=1 may be used for status checking ?? */
 		if (FRAME_S_PF(f)) {
 			if (l->busy)
@@ -919,7 +919,7 @@ static void rx_super_cmd(struct lapm_state *l, frame_t *f)
 	case FRAME_S_REJ:
 		/* clear peer_busy state */
 		l->peer_busy = 0;
-		n = ack_info(l,FRAME_NR(f));
+		(void)ack_info(l,FRAME_NR(f));
 		if (!l->rtx_count) {
 			TIMER_STOP(l);
 			reject_info(l);
@@ -944,7 +944,6 @@ static void rx_super_cmd(struct lapm_state *l, frame_t *f)
 
 static void rx_super_rsp(struct lapm_state *l, frame_t *f)
 {
-	int n;
 	//LAPM_PRINT_FRAME("rx_super",0,f);
 
 	if (!l->rtx_count && FRAME_S_PF(f)) {
@@ -955,7 +954,7 @@ static void rx_super_rsp(struct lapm_state *l, frame_t *f)
 	switch(FRAME_CTRL(f)) {
 	case FRAME_S_RR:
 		l->peer_busy = 0;
-		n = ack_info(l,FRAME_NR(f));
+		(void)ack_info(l,FRAME_NR(f));
 		if (l->rtx_count && FRAME_S_PF(f)) {
 			reject_info(l);
 			TIMER_STOP(l);
@@ -963,7 +962,7 @@ static void rx_super_rsp(struct lapm_state *l, frame_t *f)
 		break;
 	case FRAME_S_RNR:
 		l->peer_busy = 1;
-		n = ack_info(l,FRAME_NR(f));
+		(void)ack_info(l,FRAME_NR(f));
 		if (l->rtx_count && FRAME_S_PF(f)) {
 			reject_info(l);
 			TIMER_STOP(l); // fixme: need stop even on RNR ??
@@ -973,7 +972,7 @@ static void rx_super_rsp(struct lapm_state *l, frame_t *f)
 		break;
 	case FRAME_S_REJ:
 		l->peer_busy = 0;
-		n = ack_info(l,FRAME_NR(f));
+		(void)ack_info(l,FRAME_NR(f));
 		if (!l->rtx_count || FRAME_S_PF(f)) {
 			reject_info(l);
 			TIMER_STOP(l);
@@ -1314,14 +1313,16 @@ static int alloc_frames(struct lapm_state *l)
 	int i;
 	EC_DBG("alloc_frames: lapm size %d (info %d, ctrl %d).\n",
 	       sizeof(*l), sizeof(l->info_buf), sizeof(l->ctrl_buf));
-	/* init info list */
+	/* init info list — circular linked list of frame buffers. */
 	l->info_list = &l->info_buf[0].frame;
+	f = NULL;
 	for (i=0;i<arrsize(l->info_buf);i++) {
 		f = &l->info_buf[i].frame;
 		f->next = &l->info_buf[i+1].frame;
 		f->buf  = l->info_buf[i].ctrl;
 		f->size = sizeof(l->info_buf[0]) - sizeof(frame_t);
 	}
+	assert(f != NULL && "info_buf must have at least one element");
 	f->next = l->info_list;
 	l->info_count= arrsize(l->info_buf); // debug
 	l->tx_info   = l->info_list;

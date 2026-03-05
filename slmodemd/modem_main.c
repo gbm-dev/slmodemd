@@ -199,13 +199,13 @@ static int alsa_mixer_setup(struct device_struct *dev, const char *dev_name)
 {
 	char card_name[32];
 	int card_num = 0;
-	char *p;
+	const char *p;
 	snd_mixer_elem_t *elem;
 	int err;
 
 	if((p = strchr(dev_name, ':')))
 		card_num = strtoul(p+1, NULL, 0);
-	sprintf(card_name, "hw:%d", card_num);
+	snprintf(card_name, sizeof(card_name), "hw:%d", card_num);
 	
 	err = snd_mixer_open(&dev->mhandle, 0);
 	if(err < 0) {
@@ -386,7 +386,7 @@ static snd_pcm_format_t mdm2snd_format(unsigned mdm_format)
 
 static int setup_stream(snd_pcm_t *handle, struct modem *m, const char *stream_name)
 {
-	struct device_struct *dev = m->dev_data;
+	const struct device_struct *dev = m->dev_data;
 	snd_pcm_hw_params_t *hw_params;
 	snd_pcm_sw_params_t *sw_params;
 	snd_pcm_format_t format;
@@ -431,7 +431,7 @@ static int setup_stream(snd_pcm_t *handle, struct modem *m, const char *stream_n
 		return err;
 	}
 	if ( rrate != rate ) {
-		ERR("rate %d is not supported by %s (%d).\n",
+		ERR("rate %u is not supported by %s (%u).\n",
 		    rate, stream_name, rrate);
 		return -1;
 	}
@@ -666,15 +666,14 @@ static int socket_start(struct modem *m)
 		dev->fd = sockets[1];
 		dev->child_pid = pid;
 
-		/* 
+		/*
 		 * Wait for the bridge to signal it's connected to Asterisk.
 		 * This blocks slmodemd until the WebSocket is actually up.
 		 */
 		DBG("waiting for bridge handshake...\n");
 		if (read(dev->fd, handshake_buf, 1) <= 0) {
 			ERR("bridge failed to signal readiness before disconnect\n");
-			socket_stop(m);
-			return -1;
+			goto start_fail;
 		}
 		DBG("bridge handshake received: %c\n", handshake_buf[0]);
 
@@ -683,8 +682,7 @@ static int socket_start(struct modem *m)
 		snprintf(dial_cmd, sizeof(dial_cmd), "DIAL:%s\n", m->dial_string);
 		if (write(dev->fd, dial_cmd, strlen(dial_cmd)) < 0) {
 			ERR("failed to send dial string to bridge: %s\n", strerror(errno));
-			socket_stop(m);
-			return -1;
+			goto start_fail;
 		}
 		DBG("dial command sent to bridge: %s", dial_cmd);
 
@@ -695,11 +693,21 @@ static int socket_start(struct modem *m)
 		DBG("done delay thing\n");
 		if (ret < 0) {
 			log_fd_errno("write", dev->fd, 192U * 2U, 0, errno);
-			socket_stop(m);
-			return -1;
+			goto start_fail;
 		}
 		dev->delay = ret/2;
 		return 0;
+
+	start_fail:
+		/* Clean up socket and reap child on any failure path. */
+		close(dev->fd);
+		dev->fd = -1;
+		if (dev->child_pid > 0) {
+			kill(dev->child_pid, SIGTERM);
+			waitpid(dev->child_pid, NULL, 0);
+			dev->child_pid = -1;
+		}
+		return -1;
 	}
 }
 
@@ -741,7 +749,7 @@ static int socket_ioctl(struct modem *m, unsigned int cmd, unsigned long arg)
 
 	case MDMCTL_PULSEDIAL:
 		if (dev->fd >= 0) {
-			char *dial = (char *)arg;
+			const char *dial = (const char *)arg;
 			char dial_cmd[256];
 			snprintf(dial_cmd, sizeof(dial_cmd), "DIAL:%s\n", dial);
 			if (write(dev->fd, dial_cmd, strlen(dial_cmd)) < 0) return -1;
@@ -826,13 +834,25 @@ static int mdm_device_write(struct device_struct *dev, const char *buf, int size
 }
 static int mdm_device_release(struct device_struct *dev)
 {
-	close(dev->fd);
+	if (dev->fd >= 0) {
+		close(dev->fd);
+		dev->fd = -1;
+	}
+	/* Reap the bridge child process to avoid zombie accumulation. */
+	if (dev->child_pid > 0) {
+		kill(dev->child_pid, SIGTERM);
+		waitpid(dev->child_pid, NULL, 0);
+		dev->child_pid = -1;
+	}
 	return 0;
 }
 
 static int socket_device_setup(struct device_struct *dev, const char *dev_name)
 {
 	memset(dev,0,sizeof(*dev));
+	/* fd=0 (from memset) is stdin — use -1 to mean "no socket yet". */
+	dev->fd = -1;
+	dev->child_pid = -1;
 	return 0;
 }
 
@@ -864,6 +884,10 @@ int create_pty(struct modem *m)
 	}
 	else {
 		ret = tcgetattr(pty, &termios);
+		if (ret) {
+			ERR("tcgetattr: %s\n", strerror(errno));
+			return -1;
+		}
 		/* non canonical raw tty */
 		cfmakeraw(&termios);
 		cfsetispeed(&termios, B115200);
@@ -954,7 +978,7 @@ static int modem_run(struct modem *m, struct device_struct *dev)
 	unsigned long jitter_events = 0, max_loop_gap_us = 0;
 	int max_fd;
 	int ret, count;
-	void *in;
+	char *in;
 
 	while(keep_running) {
 		assert(dev != NULL);
@@ -987,22 +1011,33 @@ static int modem_run(struct modem *m, struct device_struct *dev)
                 tmo.tv_usec= 0;
                 FD_ZERO(&rset);
 		FD_ZERO(&eset);
-		if(dev->fd < 0 || dev->fd >= FD_SETSIZE) {
-			if(dev->fd >= FD_SETSIZE)
-				ERR("dev->fd %d >= FD_SETSIZE (%d)\n", dev->fd, FD_SETSIZE);
-			tmo.tv_sec = 0;
-			tmo.tv_usec = 100000;
-			select(0, NULL, NULL, NULL, &tmo);
-			continue;
+		/*
+		 * Guard against dev->fd exceeding FD_SETSIZE. FD_SET on an
+		 * out-of-range fd corrupts the fd_set and is undefined behavior.
+		 */
+		if(dev->fd >= FD_SETSIZE) {
+			ERR("dev->fd %d >= FD_SETSIZE (%d)\n", dev->fd, FD_SETSIZE);
+			return -1;
 		}
-		if(m->started)
-			FD_SET(dev->fd,&rset);
 
-		if (modem_driver != &socket_modem_driver) {
+		/*
+		 * When dev->fd < 0, the bridge socket is not yet established
+		 * (bridge not spawned or startup failed). We must still watch
+		 * the PTY for AT commands — otherwise the modem becomes deaf
+		 * to user input until a bridge connects. The bridge will start
+		 * naturally when modem_start() is called during ATDT processing.
+		 */
+		max_fd = -1;
+
+		if(dev->fd >= 0 && m->started) {
+			FD_SET(dev->fd,&rset);
+			if(dev->fd > max_fd) max_fd = dev->fd;
+		}
+
+		if (dev->fd >= 0 && modem_driver != &socket_modem_driver) {
 			FD_SET(dev->fd,&eset);
 		}
-		max_fd = dev->fd;
-		
+
 		if(pty_closed && close_count > 0) {
 			if(!m->started ||
 				++close_count > CLOSE_COUNT_MAX )
@@ -1013,6 +1048,14 @@ static int modem_run(struct modem *m, struct device_struct *dev)
 				FD_SET(m->pty,&rset);
 				if(m->pty > max_fd) max_fd = m->pty;
 			}
+		}
+
+		/* Nothing to watch — sleep briefly to avoid busy-spinning. */
+		if(max_fd < 0) {
+			tmo.tv_sec = 0;
+			tmo.tv_usec = 100000;
+			select(0, NULL, NULL, NULL, &tmo);
+			continue;
 		}
 
                 ret = select(max_fd + 1,&rset,NULL,&eset,&tmo);
@@ -1027,7 +1070,7 @@ static int modem_run(struct modem *m, struct device_struct *dev)
 		if ( ret == 0 )
 			continue;
 
-		if(FD_ISSET(dev->fd, &eset)) {
+		if(dev->fd >= 0 && FD_ISSET(dev->fd, &eset)) {
 			unsigned stat;
 			DBG("event=dev_exception fd=%d modem_state=0x%x started=%u\n",
 			    dev->fd, m->state, m->started);
@@ -1050,7 +1093,7 @@ static int modem_run(struct modem *m, struct device_struct *dev)
 			if(stat&MDMSTAT_RING)  modem_ring(m);
 			continue;
 		}
-		if(FD_ISSET(dev->fd, &rset)) {
+		if(dev->fd >= 0 && FD_ISSET(dev->fd, &rset)) {
 			count = device_read(dev,inbuf,sizeof(inbuf)/2);
 			if(count == -EAGAIN) {
 				read_empty_streak++;
@@ -1228,7 +1271,7 @@ int modem_main(const char *dev_name)
 	prop_dp_init();
 	modem_timer_init();
 
-	sprintf(link_name,"/dev/ttySL%d", device.num);
+	snprintf(link_name, sizeof(link_name), "/dev/ttySL%d", device.num);
 
 	m = modem_create(modem_driver,basename(dev_name));
 	m->name = basename(dev_name);
@@ -1244,7 +1287,7 @@ int modem_main(const char *dev_name)
 	INFO("modem `%s' created. TTY is `%s'\n",
 	     m->name, m->pty_name);
 
-	sprintf(path_name,"/var/lib/slmodem/data.%s",basename(dev_name));
+	snprintf(path_name, sizeof(path_name), "/var/lib/slmodem/data.%s",basename(dev_name));
 	datafile_load_info(path_name,&m->dsp_info);
 
 	if (need_realtime) {
@@ -1311,10 +1354,13 @@ int modem_main(const char *dev_name)
 	INFO("Use `%s' as modem device, Ctrl+C for termination.\n",
 	     *link_name ? link_name : m->pty_name);
 
-	/* Start the bridge immediately to establish WebSocket as first action */
-	if (modem_start(m) < 0) {
-		ERR("failed to start bridge at startup\n");
-	}
+	/*
+	 * Do NOT pre-start the bridge here. modem_start() sets up full call
+	 * state (hook off, DSP, error correction) which is wrong at idle.
+	 * The bridge spawns naturally when modem_start() is called during
+	 * ATDT processing. This avoids the startup race where the bridge
+	 * tries to connect to Asterisk ARI before Asterisk is ready.
+	 */
 
 	/* main loop here */
 	ret = modem_run(m,&device);
