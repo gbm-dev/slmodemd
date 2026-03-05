@@ -630,6 +630,17 @@ static int socket_start(struct modem *m)
 		return 0;
 	}
 
+	/*
+	 * Only spawn the bridge when we have an actual dial string (ATDT).
+	 * modem_reset() calls modem_start() on every ATZ, but there is
+	 * nothing to dial yet — spawning the bridge with an empty dial
+	 * string causes it to reject and disconnect, producing NO CARRIER.
+	 */
+	if (!m->dial_string[0]) {
+		DBG("socket_start: no dial string, deferring bridge spawn\n");
+		return 0;
+	}
+
 	int sockets[2];
 
 	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == -1) {
