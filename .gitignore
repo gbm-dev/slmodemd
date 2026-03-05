@@ -5,6 +5,7 @@
 /slmodemd/.build_profile
 /slmodemd/.depend
 /slmodemd/*.o
+!/slmodemd/dsplibs.o
 /slmodemd/slmodemd
 /slmodemd/modem_test
 
