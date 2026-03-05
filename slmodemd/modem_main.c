@@ -610,21 +610,12 @@ struct modem_driver alsa_modem_driver = {
 
 static int socket_stop (struct modem *m)
 {
-	struct device_struct *dev = m->dev_data;
-	DBG("socket_stop...\n");
-	if (dev->fd >= 0)
-		close(dev->fd);
-	dev->fd = -1;
-	if (dev->child_pid > 0) {
-		int status;
-		while (waitpid(dev->child_pid, &status, 0) < 0) {
-			if (errno == EINTR)
-				continue;
-			log_fd_errno("waitpid", dev->child_pid, 0, 0, errno);
-			break;
-		}
-		dev->child_pid = 0;
-	}
+	/* 
+	 * To keep the WebSocket connection persistent, we do NOT 
+	 * kill the bridge helper on hangup. The bridge itself 
+	 * handles the end of media and waits for the next call.
+	 */
+	DBG("socket_stop (no-op for persistence)...\n");
 	return 0;
 }
 
