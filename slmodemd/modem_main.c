@@ -608,6 +608,26 @@ struct modem_driver alsa_modem_driver = {
  *    external bridge process (slmodem-asterisk-bridge) for audio I/O.
  */
 
+static int socket_stop (struct modem *m)
+{
+	struct device_struct *dev = m->dev_data;
+	DBG("socket_stop...\n");
+	if (dev->fd >= 0)
+		close(dev->fd);
+	dev->fd = -1;
+	if (dev->child_pid > 0) {
+		int status;
+		while (waitpid(dev->child_pid, &status, 0) < 0) {
+			if (errno == EINTR)
+				continue;
+			log_fd_errno("waitpid", dev->child_pid, 0, 0, errno);
+			break;
+		}
+		dev->child_pid = 0;
+	}
+	return 0;
+}
+
 static int socket_start(struct modem *m)
 {
 	struct device_struct *dev = m->dev_data;
@@ -628,8 +648,6 @@ static int socket_start(struct modem *m)
 		close(sockets[0]);
 		close(sockets[1]);
 		return -1;
-	}
-
 	pid_t pid = fork();
 	if (pid == -1) {
 		log_fd_errno("fork", -1, 0, 0, errno);
@@ -646,9 +664,36 @@ static int socket_start(struct modem *m)
 		perror("execl");
 		_exit(127);
 	} else {
+		char handshake_buf[1];
 		close(sockets[0]);
 		dev->fd = sockets[1];
 		dev->child_pid = pid;
+
+		/* 
+		 * Wait for the bridge to signal it's connected to Asterisk.
+		 * This blocks slmodemd until the WebSocket is actually up.
+		 */
+		DBG("waiting for bridge handshake...\n");
+		if (read(dev->fd, handshake_buf, 1) <= 0) {
+			ERR("bridge failed to signal readiness before disconnect\n");
+			socket_stop(m);
+			return -1;
+		}
+		DBG("bridge handshake received\n");
+
+		/* Send dial string to the bridge over the socket */
+		if (write(dev->fd, m->dial_string, strlen(m->dial_string)) < 0) {
+			ERR("failed to send dial string to bridge: %s\n", strerror(errno));
+			socket_stop(m);
+			return -1;
+		}
+		if (write(dev->fd, "\n", 1) < 0) {
+			ERR("failed to send dial string newline to bridge: %s\n", strerror(errno));
+			socket_stop(m);
+			return -1;
+		}
+		DBG("dial string sent to bridge: %s\n", m->dial_string);
+
 		dev->delay = 0;
 		ret = 192*2;
 		memset(outbuf, 0 , ret);
@@ -656,35 +701,12 @@ static int socket_start(struct modem *m)
 		DBG("done delay thing\n");
 		if (ret < 0) {
 			log_fd_errno("write", dev->fd, 192U * 2U, 0, errno);
-			close(dev->fd);
-			dev->fd = -1;
-			waitpid(dev->child_pid, NULL, 0);
-			dev->child_pid = 0;
-			return ret;
+			socket_stop(m);
+			return -1;
 		}
 		dev->delay = ret/2;
+		return 0;
 	}
-	return 0;
-}
-
-static int socket_stop (struct modem *m)
-{
-	struct device_struct *dev = m->dev_data;
-	DBG("socket_stop...\n");
-	if (dev->fd >= 0)
-		close(dev->fd);
-	dev->fd = -1;
-	if (dev->child_pid > 0) {
-		int status;
-		while (waitpid(dev->child_pid, &status, 0) < 0) {
-			if (errno == EINTR)
-				continue;
-			log_fd_errno("waitpid", dev->child_pid, 0, 0, errno);
-			break;
-		}
-		dev->child_pid = 0;
-	}
-	return 0;
 }
 
 /*
@@ -720,6 +742,14 @@ static int socket_ioctl(struct modem *m, unsigned int cmd, unsigned long arg)
 	case MDMCTL_SETFRAGMENT:
 	case MDMCTL_START:
 	case MDMCTL_STOP:
+		return 0;
+
+	case MDMCTL_PULSEDIAL:
+		if (dev->fd >= 0) {
+			char *dial = (char *)arg;
+			if (write(dev->fd, dial, strlen(dial)) < 0) return -1;
+			if (write(dev->fd, "\n", 1) < 0) return -1;
+		}
 		return 0;
 
 	/* GETSTAT is the one command where arg is a pointer to unsigned. */

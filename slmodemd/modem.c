@@ -1258,6 +1258,8 @@ static void modem_setup_config(struct modem *m)
 static int do_modem_start(struct modem *m)
 {
 	int ret;
+	if (m->started)
+		return 0;
 	ret = m->driver.ioctl(m, MDMCTL_SPEED, m->srate);
 	if (ret < 0) {
 		MODEM_ERR("event=ioctl_failed op=MDMCTL_SPEED ret=%d srate=%u state=%s phase=%s\n",
@@ -1799,6 +1801,12 @@ int modem_dial(struct modem *m)
  	ret = modem_dial_start(m);
 	if(ret)
 		return -1;
+	if (m->started) {
+		// Driver already started (e.g. during reset), send dial string now
+		ret = m->driver.ioctl(m, MDMCTL_PULSEDIAL, (unsigned long)m->dial_string);
+		if (ret < 0) return -1;
+		return 0;
+	}
 	return modem_start(m);
 }
 
@@ -1898,6 +1906,7 @@ int modem_reset(struct modem *m)
 	sregs_init(m->sregs);
 	modem_homolog_init(m,m->homolog->id,NULL);
 	modem_set_mode(m, MODEM_MODE_DATA);
+	modem_start(m);
 	return 0;
 }
 
