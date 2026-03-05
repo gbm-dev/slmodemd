@@ -19,18 +19,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build CI image
+      - name: Install build dependencies
         run: |
-          docker build -f .github/docker/release.Dockerfile -t slmodemd-ci-build:latest .
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            gcc-multilib \
+            g++-multilib \
+            libc6-dev:i386 \
+            linux-libc-dev:i386 \
+            file
 
-      - name: Build and test in container
+      - name: Build
         run: |
-          docker run --rm \
-            -e FORCE_32BIT="${FORCE_32BIT}" \
-            -v "$PWD":/src \
-            -w /src \
-            slmodemd-ci-build:latest \
-            bash -lc "make clean && make"
+          make clean
+          make
 
       - name: Verify binaries
         run: |
