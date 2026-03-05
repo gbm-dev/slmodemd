@@ -1,0 +1,14 @@
+# Release/package output
+/dist/
+
+# slmodemd build artifacts
+/slmodemd/.build_profile
+/slmodemd/.depend
+/slmodemd/*.o
+/slmodemd/slmodemd
+/slmodemd/modem_test
+
+# Common local artifacts
+*.orig
+*.rej
+*~
