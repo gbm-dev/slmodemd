@@ -1903,7 +1903,14 @@ int modem_reset(struct modem *m)
 	sregs_init(m->sregs);
 	modem_homolog_init(m,m->homolog->id,NULL);
 	modem_set_mode(m, MODEM_MODE_DATA);
-	modem_start(m);
+	/*
+	 * Do NOT call modem_start() here. modem_start() takes the modem
+	 * off-hook, enters TRAINING phase, and clears m->command — which
+	 * takes the modem out of AT command mode. For an ATZ reset, we
+	 * must stay idle and in command mode so the host can continue
+	 * sending AT commands (ATE0, ATX3, ATDT, etc.). The modem will
+	 * start naturally when ATDT triggers modem_dial().
+	 */
 	return 0;
 }
 
