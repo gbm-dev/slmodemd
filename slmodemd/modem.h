@@ -92,7 +92,7 @@ enum MODEM_TRACE_PHASE {
  */
 
 #define MODEM_FORMAT MFMT_S16_LE
-#define MODEM_RATE   9600 /* 8000 */
+#define MODEM_RATE   8000
 #define MODEM_FRAG   (MODEM_RATE/200)
 #define MODEM_XMIT_SIZE 4096
 
